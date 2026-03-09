@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from typing import Any, Dict, List
+from urllib.parse import urlparse
 
 from google import genai
 from google.genai import types  # type: ignore
@@ -12,6 +13,9 @@ from mcp_server.models import ServiceInferenceResponse, ValidationPlan
 
 
 logger = logging.getLogger("mcp_server.llm")
+
+
+DEFAULT_VALIDATION_ENDPOINT = "https://example.com"
 
 
 class LLMPlanGenerator:
@@ -32,13 +36,16 @@ class LLMPlanGenerator:
     # ---------------------------------------------------
     def _fallback(self) -> ServiceInferenceResponse:
         return ServiceInferenceResponse(
+            is_secret=False,
             service="unknown",
+            secret_type="unknown",
             validation_plan=ValidationPlan(
                 method="GET",
-                endpoint="unknown",
+                endpoint=DEFAULT_VALIDATION_ENDPOINT,
                 auth_type="unknown",
             ),
             confidence=0.0,
+            reason="LLM unavailable or parse failed",
         )
 
     # ---------------------------------------------------
@@ -61,44 +68,76 @@ class LLMPlanGenerator:
 
         text = (response.text or "").strip()
 
-        try:
-            text = text.replace("```json", "").replace("```", "").strip()
+        cleaned = text.replace("```json", "").replace("```", "").strip()
+        decoder = json.JSONDecoder()
 
-            # Try direct JSON
+        def _try_decode(candidate: str):
+            candidate = candidate.strip()
+            if not candidate:
+                return None
             try:
-                return json.loads(text)
-            except Exception:
+                return json.loads(candidate)
+            except json.JSONDecodeError:
                 pass
 
-            # Try extracting array
-            start = text.find("[")
-            end = text.rfind("]")
-
-            if start != -1:
-                if end == -1:
-                    # JSON truncated → close it
-                    text = text[start:] + "]"
-                else:
-                    text = text[start:end + 1]
-
+            for i, ch in enumerate(candidate):
+                if ch not in "[{":
+                    continue
                 try:
-                    return json.loads(text)
-                except Exception:
-                    pass
+                    obj, _ = decoder.raw_decode(candidate[i:])
+                    return obj
+                except json.JSONDecodeError:
+                    continue
+            return None
 
-            # Try extracting object
-            start = text.find("{")
-            end = text.rfind("}")
+        def _repair_truncated(candidate: str) -> str:
+            stack: List[str] = []
+            in_string = False
+            escape = False
 
-            if start != -1 and end != -1:
-                try:
-                    return json.loads(text[start:end + 1])
-                except Exception:
-                    pass
+            for ch in candidate:
+                if in_string:
+                    if escape:
+                        escape = False
+                    elif ch == "\\":
+                        escape = True
+                    elif ch == '"':
+                        in_string = False
+                    continue
 
-        except Exception:
-            logger.exception("llm_parse_error raw=%s", text[:500])
+                if ch == '"':
+                    in_string = True
+                elif ch == "{":
+                    stack.append("}")
+                elif ch == "[":
+                    stack.append("]")
+                elif ch in "}]" and stack and stack[-1] == ch:
+                    stack.pop()
 
+            repaired = candidate
+            if in_string:
+                repaired += '"'
+            if stack:
+                repaired += "".join(reversed(stack))
+            return repaired
+
+        parsed = _try_decode(cleaned)
+        if parsed is not None:
+            return parsed
+
+        start_positions = [i for i, ch in enumerate(cleaned) if ch in "[{"]
+        for start in start_positions:
+            parsed = _try_decode(cleaned[start:])
+            if parsed is not None:
+                return parsed
+
+            repaired = _repair_truncated(cleaned[start:])
+            parsed = _try_decode(repaired)
+            if parsed is not None:
+                logger.warning("llm_parse_recovered_truncated_json")
+                return parsed
+
+        logger.error("llm_parse_error raw=%s", cleaned[:500])
         return None
         # ---------------------------------------------------
         # Quick service detection
@@ -117,7 +156,30 @@ class LLMPlanGenerator:
         if secret.startswith("ghp_"):
             return "github"
 
+        if secret.startswith("xoxb-"):
+            return "slack"
+
+        if secret.startswith("AIza"):
+            return "google"
+
         return None
+
+    def _sanitize_validation_plan(self, plan: Any) -> Dict[str, Any]:
+        if not isinstance(plan, dict):
+            plan = {}
+
+        endpoint = str(plan.get("endpoint", "")).strip()
+        parsed = urlparse(endpoint)
+        is_valid_endpoint = bool(parsed.scheme and parsed.netloc)
+
+        if not is_valid_endpoint:
+            endpoint = DEFAULT_VALIDATION_ENDPOINT
+
+        return {
+            "method": "GET",
+            "endpoint": endpoint,
+            "auth_type": str(plan.get("auth_type", "unknown")),
+        }
 
     # ---------------------------------------------------
     # Infer service using LLM
@@ -128,13 +190,16 @@ class LLMPlanGenerator:
 
         if guess:
             return ServiceInferenceResponse(
+                is_secret=True,
                 service=guess,
+                secret_type="api_key",
                 validation_plan=ValidationPlan(
                     method="GET",
-                    endpoint="unknown",
+                    endpoint=DEFAULT_VALIDATION_ENDPOINT,
                     auth_type="Bearer",
                 ),
                 confidence=0.9,
+                reason="Prefix-based service inference",
             )
 
         if not self.client:
@@ -193,13 +258,8 @@ class LLMPlanGenerator:
             "service": str(payload.get("service", "unknown")).lower(),
             "confidence": payload.get("confidence", 0.5),
             "reason": "LLM inferred service",
-            "validation_plan": payload.get(
-                "validation_plan",
-                {
-                    "method": "GET",
-                    "endpoint": "unknown",
-                    "auth_type": "unknown",
-                },
+            "validation_plan": self._sanitize_validation_plan(
+                payload.get("validation_plan", {})
             ),
         }
 
