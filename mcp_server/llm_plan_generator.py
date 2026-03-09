@@ -156,6 +156,12 @@ class LLMPlanGenerator:
         if secret.startswith("ghp_"):
             return "github"
 
+        if secret.startswith("xoxb-"):
+            return "slack"
+
+        if secret.startswith("AIza"):
+            return "google"
+
         return None
 
     def _sanitize_validation_plan(self, plan: Any) -> Dict[str, Any]:
