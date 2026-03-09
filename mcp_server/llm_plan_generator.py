@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from typing import Any, Dict, List
+from urllib.parse import urlparse
 
 from google import genai
 from google.genai import types  # type: ignore
@@ -12,6 +13,9 @@ from mcp_server.models import ServiceInferenceResponse, ValidationPlan
 
 
 logger = logging.getLogger("mcp_server.llm")
+
+
+DEFAULT_VALIDATION_ENDPOINT = "https://example.com"
 
 
 class LLMPlanGenerator:
@@ -32,13 +36,16 @@ class LLMPlanGenerator:
     # ---------------------------------------------------
     def _fallback(self) -> ServiceInferenceResponse:
         return ServiceInferenceResponse(
+            is_secret=False,
             service="unknown",
+            secret_type="unknown",
             validation_plan=ValidationPlan(
                 method="GET",
-                endpoint="unknown",
+                endpoint=DEFAULT_VALIDATION_ENDPOINT,
                 auth_type="unknown",
             ),
             confidence=0.0,
+            reason="LLM unavailable or parse failed",
         )
 
     # ---------------------------------------------------
@@ -151,6 +158,23 @@ class LLMPlanGenerator:
 
         return None
 
+    def _sanitize_validation_plan(self, plan: Any) -> Dict[str, Any]:
+        if not isinstance(plan, dict):
+            plan = {}
+
+        endpoint = str(plan.get("endpoint", "")).strip()
+        parsed = urlparse(endpoint)
+        is_valid_endpoint = bool(parsed.scheme and parsed.netloc)
+
+        if not is_valid_endpoint:
+            endpoint = DEFAULT_VALIDATION_ENDPOINT
+
+        return {
+            "method": "GET",
+            "endpoint": endpoint,
+            "auth_type": str(plan.get("auth_type", "unknown")),
+        }
+
     # ---------------------------------------------------
     # Infer service using LLM
     # ---------------------------------------------------
@@ -160,13 +184,16 @@ class LLMPlanGenerator:
 
         if guess:
             return ServiceInferenceResponse(
+                is_secret=True,
                 service=guess,
+                secret_type="api_key",
                 validation_plan=ValidationPlan(
                     method="GET",
-                    endpoint="unknown",
+                    endpoint=DEFAULT_VALIDATION_ENDPOINT,
                     auth_type="Bearer",
                 ),
                 confidence=0.9,
+                reason="Prefix-based service inference",
             )
 
         if not self.client:
@@ -225,13 +252,8 @@ class LLMPlanGenerator:
             "service": str(payload.get("service", "unknown")).lower(),
             "confidence": payload.get("confidence", 0.5),
             "reason": "LLM inferred service",
-            "validation_plan": payload.get(
-                "validation_plan",
-                {
-                    "method": "GET",
-                    "endpoint": "unknown",
-                    "auth_type": "unknown",
-                },
+            "validation_plan": self._sanitize_validation_plan(
+                payload.get("validation_plan", {})
             ),
         }
 
