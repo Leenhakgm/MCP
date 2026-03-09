@@ -61,44 +61,76 @@ class LLMPlanGenerator:
 
         text = (response.text or "").strip()
 
-        try:
-            text = text.replace("```json", "").replace("```", "").strip()
+        cleaned = text.replace("```json", "").replace("```", "").strip()
+        decoder = json.JSONDecoder()
 
-            # Try direct JSON
+        def _try_decode(candidate: str):
+            candidate = candidate.strip()
+            if not candidate:
+                return None
             try:
-                return json.loads(text)
-            except Exception:
+                return json.loads(candidate)
+            except json.JSONDecodeError:
                 pass
 
-            # Try extracting array
-            start = text.find("[")
-            end = text.rfind("]")
-
-            if start != -1:
-                if end == -1:
-                    # JSON truncated → close it
-                    text = text[start:] + "]"
-                else:
-                    text = text[start:end + 1]
-
+            for i, ch in enumerate(candidate):
+                if ch not in "[{":
+                    continue
                 try:
-                    return json.loads(text)
-                except Exception:
-                    pass
+                    obj, _ = decoder.raw_decode(candidate[i:])
+                    return obj
+                except json.JSONDecodeError:
+                    continue
+            return None
 
-            # Try extracting object
-            start = text.find("{")
-            end = text.rfind("}")
+        def _repair_truncated(candidate: str) -> str:
+            stack: List[str] = []
+            in_string = False
+            escape = False
 
-            if start != -1 and end != -1:
-                try:
-                    return json.loads(text[start:end + 1])
-                except Exception:
-                    pass
+            for ch in candidate:
+                if in_string:
+                    if escape:
+                        escape = False
+                    elif ch == "\\":
+                        escape = True
+                    elif ch == '"':
+                        in_string = False
+                    continue
 
-        except Exception:
-            logger.exception("llm_parse_error raw=%s", text[:500])
+                if ch == '"':
+                    in_string = True
+                elif ch == "{":
+                    stack.append("}")
+                elif ch == "[":
+                    stack.append("]")
+                elif ch in "}]" and stack and stack[-1] == ch:
+                    stack.pop()
 
+            repaired = candidate
+            if in_string:
+                repaired += '"'
+            if stack:
+                repaired += "".join(reversed(stack))
+            return repaired
+
+        parsed = _try_decode(cleaned)
+        if parsed is not None:
+            return parsed
+
+        start_positions = [i for i, ch in enumerate(cleaned) if ch in "[{"]
+        for start in start_positions:
+            parsed = _try_decode(cleaned[start:])
+            if parsed is not None:
+                return parsed
+
+            repaired = _repair_truncated(cleaned[start:])
+            parsed = _try_decode(repaired)
+            if parsed is not None:
+                logger.warning("llm_parse_recovered_truncated_json")
+                return parsed
+
+        logger.error("llm_parse_error raw=%s", cleaned[:500])
         return None
         # ---------------------------------------------------
         # Quick service detection
