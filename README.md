@@ -126,33 +126,32 @@ Response shape:
 - Add signed audit log sink and SIEM-native export.
 
 
-## CLI usage (`mcp-scan`)
+## CLI usage (`mcpsentinel`)
 
-Run directly without API server:
-
-```bash
-python cli.py scan ./repo
-python cli.py scan https://github.com/user/repository
-```
-
-Installable command:
+Install and use MCP Sentinel as a Linux-style CLI:
 
 ```bash
-python -m pip install .
-mcp-scan scan ./repo
+pip install -e .
+mcpsentinel scan ./repo
+mcpsentinel scan https://github.com/user/repository
+mcpsentinel version
+mcpsentinel help
 ```
 
 Optional flags:
 
 ```bash
-mcp-scan scan ./repo --json
-mcp-scan scan ./repo --output report.json
-mcp-scan scan ./repo --max-workers 10
+mcpsentinel scan ./repo --json
+mcpsentinel scan ./repo --output report.json
+mcpsentinel scan ./repo --max-workers 10
 ```
 
 Example terminal output:
 
 ```text
+MCP Sentinel v1.0
+AI Secret Detection & Validation Engine
+
 Scanning repository...
 
 [HIGH RISK]

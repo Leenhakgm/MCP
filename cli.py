@@ -12,6 +12,15 @@ from mcp_server.models import RepoScanRequest, RepoScanResponse
 from mcp_server.repo_scanner import scan_repository
 from mcp_server.validator import execute_validation
 
+CLI_VERSION = "1.0"
+TOOL_NAME = "MCP Sentinel"
+TOOL_TAGLINE = "AI Secret Detection & Validation Engine"
+
+
+def _print_banner() -> None:
+    print(f"{TOOL_NAME} v{CLI_VERSION}")
+    print(TOOL_TAGLINE)
+
 
 def _is_github_target(target: str) -> bool:
     parsed = urlparse(target)
@@ -52,13 +61,10 @@ def _print_human(report: RepoScanResponse) -> None:
         print(f"Service: {item.service}")
         print(f"Status: {status}\n")
 
-    invalid_count = sum(
-        1 for r in report.results
-        if r.validation_result.get("status") == "INVALID"
-    )
-
+    invalid_count = sum(1 for r in report.results if r.validation_result.get("status") == "INVALID")
     unknown_count = sum(
-        1 for r in report.results
+        1
+        for r in report.results
         if r.validation_result.get("status") in {"UNKNOWN", "ERROR", "SKIPPED"}
     )
 
@@ -91,6 +97,8 @@ def run_scan(args: argparse.Namespace) -> int:
         if args.json:
             print(report.model_dump_json(indent=2))
         else:
+            _print_banner()
+            print()
             _print_human(report)
 
         return 0
@@ -100,10 +108,25 @@ def run_scan(args: argparse.Namespace) -> int:
         return 1
 
 
+def run_version(_: argparse.Namespace) -> int:
+    _print_banner()
+    return 0
+
+
+def run_help(args: argparse.Namespace) -> int:
+    _print_banner()
+    print()
+    if args.topic and args.topic in args.parser._name_parser_map:
+        args.parser._name_parser_map[args.topic].print_help()
+    else:
+        args.root_parser.print_help()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="mcp-scan",
-        description="MCP Secret Validator CLI",
+        prog="mcpsentinel",
+        description="MCP Sentinel command line interface",
     )
 
     sub = parser.add_subparsers(dest="command", required=True)
@@ -113,57 +136,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="Scan a local repository path or GitHub URL",
     )
 
-    scan.add_argument(
-        "target",
-        help="Local folder path or GitHub repository URL",
-    )
-
-    scan.add_argument(
-        "--json",
-        action="store_true",
-        help="Output report as JSON",
-    )
-
-    scan.add_argument(
-        "--output",
-        help="Write report JSON to file",
-    )
-
-    scan.add_argument(
-        "--max-workers",
-        type=int,
-        default=4,
-        help="Maximum parallel workers",
-    )
-
-    scan.add_argument(
-        "--timeout",
-        type=int,
-        default=8,
-        help="Per-future validation timeout in seconds",
-    )
-
+    scan.add_argument("target", help="Local folder path or GitHub repository URL")
+    scan.add_argument("--json", action="store_true", help="Output report as JSON")
+    scan.add_argument("--output", help="Write report JSON to file")
+    scan.add_argument("--max-workers", type=int, default=4, help="Maximum parallel workers")
+    scan.add_argument("--timeout", type=int, default=8, help="Per-future validation timeout in seconds")
     scan.add_argument(
         "--min-detection-confidence",
         type=float,
         default=0.55,
         help="Minimum detection confidence",
     )
-
     scan.add_argument(
         "--min-validation-confidence",
         type=float,
         default=0.6,
         help="Minimum confidence to validate",
     )
-
     scan.add_argument(
         "--config",
         default="mcp_server/repo_scanner_config.json",
         help="Ignore-pattern config",
     )
-
     scan.set_defaults(func=run_scan)
+
+    version = sub.add_parser("version", help="Show MCP Sentinel version")
+    version.set_defaults(func=run_version)
+
+    help_cmd = sub.add_parser("help", help="Show general or command-specific help")
+    help_cmd.add_argument("topic", nargs="?", choices=["scan", "version", "help"])
+    help_cmd.set_defaults(func=run_help, root_parser=parser, parser=sub)
 
     return parser
 

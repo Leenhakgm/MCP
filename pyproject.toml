@@ -3,8 +3,8 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mcp-secret-validator"
-version = "0.1.0"
+name = "mcpsentinel"
+version = "1.0"
 description = "LLM-based dynamic secret detection and validation engine"
 requires-python = ">=3.11"
 dependencies = [
@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.scripts]
-mcp-scan = "cli:main"
+mcpsentinel = "cli:main"
 
 [tool.setuptools]
 packages = ["mcp_server"]
