@@ -298,7 +298,7 @@ class LLMPlanGenerator:
             "}\n\n"
 
             f"Secret: {secret}\n"
-            f"Context:\n{context[:2000]}"
+            f"Context:\n{context[:4000]}"
         )
 
         payload = self._ask_json(prompt)
