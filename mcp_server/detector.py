@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from typing import List
 
+from mcp_server.advanced_secret_detection import scan_obfuscated_secrets
 from mcp_server.llm_plan_generator import LLMPlanGenerator
 from mcp_server.models import DetectionRequest, DetectionResult
 from mcp_server.security import secret_hash
@@ -12,12 +13,17 @@ logger = logging.getLogger("mcp_server.detector")
 
 
 def detect_secrets(request: DetectionRequest) -> List[DetectionResult]:
-    """LLM-based contextual secret detection (no regex/pattern matching)."""
+    """Hybrid secret detection using deterministic obfuscation scanning + LLM context."""
 
     findings: List[DetectionResult] = []
     llm = LLMPlanGenerator()
 
     for src in request.files:
+        combined_findings = []
+
+        # deterministic pre-scan for obfuscated and encoded secret patterns
+        obfuscated_findings = scan_obfuscated_secrets(src.content)
+        combined_findings.extend(obfuscated_findings)
 
         llm_findings = llm.detect_secrets_in_file(src.path, src.content)
 
@@ -26,9 +32,11 @@ def detect_secrets(request: DetectionRequest) -> List[DetectionResult]:
             llm_findings = [llm_findings]
 
         if not isinstance(llm_findings, list):
-            continue
+            llm_findings = []
 
-        for item in llm_findings:
+        combined_findings.extend(llm_findings)
+
+        for item in combined_findings:
 
             if not isinstance(item, dict):
                 continue
@@ -43,11 +51,10 @@ def detect_secrets(request: DetectionRequest) -> List[DetectionResult]:
             context = str(item.get("context", "")) or src.content[:300]
             line_number = int(item.get("line_number", 1) or 1)
 
-            # call service inference ONCE
-            service_info = llm.infer_service(secret, context)
-            service = service_info.service
-
-            print("DETECTED SERVICE:", service)
+            service = "unknown"
+            if item.get("secret_type") != "obfuscated":
+                service_info = llm.infer_service(secret, context)
+                service = service_info.service
 
             finding = DetectionResult(
                 secret=secret,
