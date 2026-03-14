@@ -1,6 +1,18 @@
-# LLM-Based Dynamic Secret Detection and Validation Engine
+# MCP Sentinel
 
-## Architecture Diagram (Text)
+MCP Sentinel is an AI-powered secret detection and validation engine for repositories and local file collections. It combines LLM-based contextual analysis with controlled API validation to identify likely credentials, determine exposure risk, and produce actionable security findings.
+
+## Features
+
+- LLM-based secret detection with contextual reasoning
+- Obfuscated secret detection across noisy code and config patterns
+- Encoded credential detection (e.g., Base64-like payloads)
+- API validation engine for service-aware secret verification
+- GitHub repository scanning and local path scanning
+- CLI and FastAPI interfaces for automation and integration
+- Parallel validation pipeline with bounded worker controls
+
+## Architecture
 
 ```text
 +---------------------------+        +---------------------------+        +------------------------------+
@@ -27,19 +39,63 @@
                                               +---------------------------------------+
 ```
 
-## How to run
+### Module Overview
+
+- **Secret Detector**: Identifies potential credentials using pattern signals and context-aware LLM inference.
+- **LLM Plan Generator**: Produces constrained validation plans (service, endpoint, method rules, confidence).
+- **Validation Executor**: Executes hardened checks against approved HTTPS endpoints with timeout controls.
+- **Repo Scanner**: Walks local or cloned repositories, filters unsupported paths/files, and extracts candidate content.
+- **Parallel Validation Queue**: Processes candidate secrets concurrently using a bounded thread pool and caching.
+
+## Installation
 
 ```bash
 python3.11 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r mcp_server/requirements.txt
-export GEMINI_API_KEY="<your-key>"   # optional; inference falls back to unknown
+```
+
+Optional CLI install:
+
+```bash
+python -m pip install .
+```
+
+## Configuration
+
+Set environment variables before running scans:
+
+```bash
+export GEMINI_API_KEY="<your-key>"
+```
+
+- `GEMINI_API_KEY`: Enables LLM inference for contextual secret analysis and validation planning.
+  - If unset, detections may fall back to reduced-confidence/unknown behavior depending on runtime settings.
+
+## Usage
+
+### CLI Example
+
+```bash
+mcpsentinel scan ./repo
+```
+
+Additional examples:
+
+```bash
+mcpsentinel scan https://github.com/org/repo
+mcpsentinel scan ./repo --json --output report.json --max-workers 8
+```
+
+### API Example
+
+Start the API server:
+
+```bash
 uvicorn mcp_server.main:app --host 0.0.0.0 --port 8000
 ```
 
-## New repository scanning API
-
-`POST /scan-repo`
+Scan a repository with `POST /scan-repo`:
 
 ```json
 {
@@ -53,7 +109,7 @@ uvicorn mcp_server.main:app --host 0.0.0.0 --port 8000
 }
 ```
 
-Optional GitHub scan:
+GitHub scan payload:
 
 ```json
 {
@@ -61,96 +117,7 @@ Optional GitHub scan:
 }
 ```
 
-Response shape:
-
-```json
-{
-  "total_files_scanned": 152,
-  "total_secrets_detected": 3,
-  "total_valid_secrets": 1,
-  "results": [
-    {
-      "file": "/workspace/mcp-secret-validator/example.py",
-      "secret": "sk_...xyz",
-      "service": "stripe",
-      "confidence": 0.81,
-      "validation_result": {
-        "status": "INVALID",
-        "risk": "LOW",
-        "reason": "Rejected by endpoint (401)"
-      }
-    }
-  ]
-}
-```
-
-## Security Controls
-
-- **Path safety**: local repo paths must remain inside the configured workspace root.
-- **No execution**: scanner only reads text files; never executes code.
-- **Filtering**: skips `.git`, `node_modules`, `__pycache__`, binaries, and files over 2MB.
-- **SSRF mitigation**: DNS/IP policy blocks localhost/private/internal targets.
-- **Method hardening**: validation plans only allow `GET`; POST/PUT are rejected.
-- **Transport hardening**: HTTPS-only endpoints.
-- **Timeout control**: per-request timeout and thread-pool timeout boundaries.
-- **Secret exposure reduction**: outputs and logs use masked secrets (`abc...xyz`) and hashes.
-
-## Performance notes
-
-- Uses `ThreadPoolExecutor` for parallel validation.
-- Max workers are bounded server-side to reduce API abuse.
-- Results are cached by secret hash to avoid duplicate inference/validation calls.
-- Async API endpoint (`/scan-repo-async`) wraps scanner with `asyncio.to_thread`.
-
-## Example test case
-
-1. Create repo folder with:
-   - `app.py` containing `api_key = "sk_live_ABCDEF1234567890xyz"`
-   - `fixtures.py` containing `token = "test_token_123"`
-2. Call `/scan-repo` with path pointing to that folder.
-3. Expected outcome:
-   - One high-confidence secret from `app.py`.
-   - Placeholder token suppressed.
-   - Masked secret in report.
-
-## Limitations
-
-- LLM inference quality depends on Gemini availability and prompt behavior.
-- Public endpoint checks may produce false negatives for throttled/atypical APIs.
-- Plugin registry is in-memory.
-
-## Future improvements
-
-- Add persistent cache backend (Redis) and distributed queue.
-- Add AST-based language analyzers and taint-aware context extraction.
-- Add signed audit log sink and SIEM-native export.
-
-
-## CLI usage (`mcp-scan`)
-
-Run directly without API server:
-
-```bash
-python cli.py scan ./repo
-python cli.py scan https://github.com/user/repository
-```
-
-Installable command:
-
-```bash
-python -m pip install .
-mcp-scan scan ./repo
-```
-
-Optional flags:
-
-```bash
-mcp-scan scan ./repo --json
-mcp-scan scan ./repo --output report.json
-mcp-scan scan ./repo --max-workers 10
-```
-
-Example terminal output:
+## Example Output
 
 ```text
 Scanning repository...
@@ -161,6 +128,13 @@ Secret: sk_...xyz
 Service: stripe
 Status: VALID
 
+[MEDIUM RISK]
+File: deploy.env
+Secret: ghp_...9x2
+Service: github
+Status: INVALID
+Reason: Rejected by endpoint (401)
+
 Scan Complete
 
 Files scanned: 127
@@ -169,3 +143,31 @@ Valid secrets: 2
 Invalid secrets: 3
 Unknown secrets: 0
 ```
+
+## Security Controls
+
+- **Path safety**: Restricts local scans to approved workspace boundaries.
+- **SSRF protection**: Blocks localhost, private, and internal network targets during validation.
+- **HTTPS-only validation**: Rejects non-TLS endpoints in generated validation plans.
+- **Masked secrets**: Redacts findings in logs/reports (e.g., `abc...xyz`) and uses hashes where possible.
+- **Execution safety**: Reads files only; does not execute repository code.
+- **Timeout and method hardening**: Enforces strict request timeouts and allowed HTTP methods.
+
+## Performance
+
+- Uses a bounded **thread pool** for parallel validation execution.
+- Applies result **caching** by secret hash to prevent duplicate checks.
+- Improves throughput with **parallel validation** while maintaining server-side worker limits.
+- Supports async API flow via background thread execution for scan requests.
+
+## Limitations
+
+- LLM inference quality depends on model availability, prompt behavior, and context quality.
+- API-side validation may produce false negatives for rate-limited or non-standard services.
+- Dynamic or fragmented secrets across multiple files can be harder to validate confidently.
+
+## Future Improvements
+
+- Redis-backed distributed cache and queueing for larger scan workloads.
+- AST-based analysis for language-aware extraction and improved precision.
+- SIEM integration for native alert forwarding and enterprise reporting.
