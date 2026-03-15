@@ -33,7 +33,7 @@
 python3.11 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r mcp_server/requirements.txt
-export GEMINI_API_KEY="<your-key>"   # optional; inference falls back to unknown
+export GROQ_API_KEY="<your-key>"   # optional; inference falls back to unknown
 uvicorn mcp_server.main:app --host 0.0.0.0 --port 8000
 ```
 
