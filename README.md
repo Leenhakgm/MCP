@@ -139,15 +139,15 @@ Installable command:
 
 ```bash
 python -m pip install .
-mcp-scan scan ./repo
+mcpsentinal scan ./repo
 ```
 
 Optional flags:
 
 ```bash
-mcp-scan scan ./repo --json
-mcp-scan scan ./repo --output report.json
-mcp-scan scan ./repo --max-workers 10
+mcpsentinal scan ./repo --json
+mcpsentinal scan ./repo --output report.json
+mcpsentinal scan ./repo --max-workers 10
 ```
 
 Example terminal output:
